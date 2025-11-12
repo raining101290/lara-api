@@ -58,7 +58,8 @@ Route::middleware('auth:customer_api')->group(function () {
     Route::patch('customers/{id}/update-password',[CustomerController::class, 'updatePassword']);
     Route::patch('customers/{id}/status', [CustomerController::class, 'updateStatus']);
     Route::apiResource('customers', CustomerController::class);
+
+    Route::apiResource('domain-orders', DomainOrderController::class);
 });
 
 Route::apiResource('domains', DomainTldController::class);
-Route::apiResource('domain-orders', DomainOrderController::class);

@@ -17,14 +17,24 @@ class DomainOrderController extends Controller
      */
     public function index(Request $request)
     {
+        $user = auth()->user(); // Get logged-in user
+
+        if (!$user) {
+            return ApiResponse::error('Unauthorized access. Token required.', 401);
+        }
+
         if ($request->has('status') && !in_array($request->status, [
-        'pending', 'processing', 'active', 
-        'rejected', 'failed', 'expired', 
-        'cancelled', 'refunded'
+            'pending', 'processing', 'active', 
+            'rejected', 'failed', 'expired', 
+            'cancelled', 'refunded'
         ])) {
             return ApiResponse::error('Invalid status filter', 422);
         }
-        $query = DomainOrder::with(['documents'])->latest();
+
+        $query = DomainOrder::with(['documents'])
+            ->where('customer_id', $user->id) // ✅ Return only user's orders
+            ->latest();
+
         if ($request->has('status')) {
             $query->where('status', $request->status);
         }
@@ -33,6 +43,24 @@ class DomainOrderController extends Controller
 
         return ApiResponse::success('Domain orders retrieved successfully', $orders);
     }
+    // public function index(Request $request)
+    // {
+    //     if ($request->has('status') && !in_array($request->status, [
+    //     'pending', 'processing', 'active', 
+    //     'rejected', 'failed', 'expired', 
+    //     'cancelled', 'refunded'
+    //     ])) {
+    //         return ApiResponse::error('Invalid status filter', 422);
+    //     }
+    //     $query = DomainOrder::with(['documents'])->latest();
+    //     if ($request->has('status')) {
+    //         $query->where('status', $request->status);
+    //     }
+
+    //     $orders = $query->paginate(10);
+
+    //     return ApiResponse::success('Domain orders retrieved successfully', $orders);
+    // }
 
     /**
      * Store a newly created resource in storage.
