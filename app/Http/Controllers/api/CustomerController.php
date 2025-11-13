@@ -5,11 +5,14 @@ namespace App\Http\Controllers\api;
 use App\Http\Controllers\Controller;
 use App\Models\Customer;
 use App\Models\CustomerInfo;
+use App\Models\DomainOrder;
+use App\Models\Invoice;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Database\QueryException;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Log;
 
 class CustomerController extends Controller
 {
@@ -298,5 +301,81 @@ class CustomerController extends Controller
             'id'     => $customer->id,
             'status' => $customer->status
         ]);
+    }
+
+    
+    public function dashboardSummary(Request $request)
+    {
+        try {
+            $customer = auth('customer_api')->user(); 
+
+            if (!$customer) {
+                return ApiResponse::error('Unauthorized access. Token required.', 401);
+            }
+
+            // --- Domains ---
+            $totalDomains = DomainOrder::where('customer_id', $customer->id)->count();
+            $activeDomains = DomainOrder::where('customer_id', $customer->id)
+                ->where('status', 'approved')
+                ->count();
+
+            // --- Invoices ---
+            $totalInvoices = Invoice::where('customer_id', $customer->id)->count();
+
+            $unpaidInvoices = Invoice::where('customer_id', $customer->id)
+                ->where('status', 'unpaid')
+                ->count();
+
+            $amountDue = Invoice::where('customer_id', $customer->id)
+                ->where('status', 'unpaid')
+                ->sum('amount');
+
+            $paidInvoices = Invoice::where('customer_id', $customer->id)
+                ->where('status', 'paid')
+                ->count();
+
+            $paidThisYear = Invoice::where('customer_id', $customer->id)
+                ->where('status', 'paid')
+                ->whereYear('paid_at', now()->year)
+                ->sum('amount');
+
+            // --- Recent activity ---
+            $recentInvoices = Invoice::where('customer_id', $customer->id)
+                ->latest()
+                ->take(5)
+                ->get(['id', 'invoice_no', 'amount', 'status', 'created_at']);
+
+            $recentDomains = DomainOrder::where('customer_id', $customer->id)
+                ->latest()
+                ->take(5)
+                ->get(['id', 'domain_name', 'status', 'amount', 'created_at']);
+
+            // --- Response ---
+            return ApiResponse::success('Dashboard summary fetched successfully', [
+                'user' => [
+                    'id' => $customer->id,
+                    'full_name' => $customer->full_name,
+                    'email' => $customer->email,
+                ],
+                'domains' => [
+                    'total' => $totalDomains,
+                    'active' => $activeDomains,
+                ],
+                'invoices' => [
+                    'total_count' => $totalInvoices,
+                    'paid_count' => $paidInvoices,
+                    'unpaid_count' => $unpaidInvoices,
+                    'amount_due' => $amountDue,
+                    'paid_this_year' => $paidThisYear,
+                ],
+                'recent' => [
+                    'domains' => $recentDomains,
+                    'invoices' => $recentInvoices,
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            return ApiResponse::error('Failed to fetch dashboard summary', $e->getMessage(), 500);
+        }
     }
 }

@@ -3,12 +3,30 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Mail\InvoiceMail;
+use App\Models\Customer;
 use App\Models\DomainOrder;
 use App\Models\DomainTld;
 use App\Models\DomainTldPrice;
+use App\Models\Invoice;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Mail;
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\DomainOrder;
+use App\Models\DomainTld;
+use App\Models\DomainTldPrice;
+use App\Models\Customer;
+use App\Models\Invoice;
+use App\Mail\InvoiceMail;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Validator;
+use App\Support\ApiResponse;
 
 class DomainOrderController extends Controller
 {
@@ -17,128 +35,118 @@ class DomainOrderController extends Controller
      */
     public function index(Request $request)
     {
-        $user = auth()->user(); // Get logged-in user
+        // Detect who is calling
+        $isAdmin = auth('api')->check();
+        $isCustomer = auth('customer_api')->check();
 
-        if (!$user) {
+        if (!$isAdmin && !$isCustomer) {
             return ApiResponse::error('Unauthorized access. Token required.', 401);
         }
 
+        // Validate optional status filter
         if ($request->has('status') && !in_array($request->status, [
-            'pending', 'processing', 'active', 
-            'rejected', 'failed', 'expired', 
-            'cancelled', 'refunded'
+            'pending', 'processing', 'active', 'rejected',
+            'failed', 'expired', 'cancelled', 'refunded'
         ])) {
             return ApiResponse::error('Invalid status filter', 422);
         }
 
-        $query = DomainOrder::with(['documents'])
-            ->where('customer_id', $user->id) // ✅ Return only user's orders
-            ->latest();
+        // Build base query
+        $query = DomainOrder::with(['documents', 'customer'])->latest();
 
-        if ($request->has('status')) {
+        if ($isCustomer) {
+            $user = auth('customer_api')->user();
+            $query->where('customer_id', $user->id);
+        }
+
+        if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
 
-        $orders = $query->paginate(10);
+        // Pagination
+        $limit = $request->query('limit', 10);
+        $orders = $limit === 'all' ? $query->get() : $query->paginate((int) $limit);
 
         return ApiResponse::success('Domain orders retrieved successfully', $orders);
     }
-    // public function index(Request $request)
-    // {
-    //     if ($request->has('status') && !in_array($request->status, [
-    //     'pending', 'processing', 'active', 
-    //     'rejected', 'failed', 'expired', 
-    //     'cancelled', 'refunded'
-    //     ])) {
-    //         return ApiResponse::error('Invalid status filter', 422);
-    //     }
-    //     $query = DomainOrder::with(['documents'])->latest();
-    //     if ($request->has('status')) {
-    //         $query->where('status', $request->status);
-    //     }
-
-    //     $orders = $query->paginate(10);
-
-    //     return ApiResponse::success('Domain orders retrieved successfully', $orders);
-    // }
 
     /**
      * Store a newly created resource in storage.
      */
     public function store(Request $request)
     {
-        $request->headers->set('Accept', 'application/json');
+        $isAdmin = auth('api')->check();
+        $isCustomer = auth('customer_api')->check();
 
-        $validator = Validator::make($request->all(), [
-            'customer_id'     => 'required|exists:customers,id',
-            'domain_name'     => 'required|string',
-            'years'           => 'required|integer|min:1|max:10',
-            // 'amount'          => 'required|numeric',
-            'customer_type'   => 'required|in:individual,company',
-            'nid_file'        => 'required|file',
-            'trade_license'   => 'required|file',
-            'auth_letter'     => 'required_if:customer_type,individual|file',
-            'other_doc'       => 'nullable|file',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation error',
-                'errors'  => $validator->errors()
-            ], 422);
+        if (!$isAdmin && !$isCustomer) {
+            return ApiResponse::error('Unauthorized access.', 401);
         }
 
-        // ✅ Extract TLD from domain
+        // Validation rules differ slightly
+        $rules = [
+            'domain_name'   => 'required|string',
+            'years'         => 'required|integer|min:1|max:10',
+            'customer_type' => 'required|in:individual,company',
+            'nid_file'      => 'required|file',
+            'trade_license' => 'required|file',
+            'auth_letter'   => 'required_if:customer_type,individual|file',
+            'other_doc'     => 'nullable|file',
+        ];
+
+        if ($isAdmin) {
+            $rules['customer_id'] = 'required|exists:customers,id';
+        }
+
+        $validator = Validator::make($request->all(), $rules);
+        if ($validator->fails()) {
+            return ApiResponse::error('Validation error', $validator->errors(), 422);
+        }
+
+        // Determine which customer to assign
+        $customerId = $isAdmin
+            ? $request->customer_id
+            : auth('customer_api')->id();
+
+        // Extract TLD
         $domainParts = explode('.', $request->domain_name, 2);
-        $tld = '.' . strtolower(trim($domainParts[1]));
+        $tld = isset($domainParts[1]) ? '.' . strtolower(trim($domainParts[1])) : null;
 
         if (!$tld) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Invalid domain format'
-            ], 422);
+            return ApiResponse::error('Invalid domain format', 422);
         }
 
-        // ✅ Find TLD in database
+        // Find active TLD and price
         $tldRecord = DomainTld::where('name', $tld)->where('status', 'active')->first();
         if (!$tldRecord) {
-            return response()->json([
-                'success' => false,
-                'message' => 'TLD not supported'
-            ], 422);
+            return ApiResponse::error('TLD not supported', 422);
         }
 
-        // ✅ Get price for selected years
         $priceRecord = DomainTldPrice::where('tld_id', $tldRecord->id)
-                        ->where('years', $request->years)
-                        ->first();
+            ->where('years', $request->years)
+            ->first();
 
         if (!$priceRecord) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Pricing not found for selected year'
-            ], 422);
+            return ApiResponse::error('Pricing not found for selected year', 422);
         }
 
-        // ✅ Now assign secure price from DB
         $finalPrice = $priceRecord->register_price;
 
-        // ✅ Create Order with DB price (not frontend price)
+        // Create order
         $order = DomainOrder::create([
-            'customer_id'   => $request->customer_id,
+            'customer_id'   => $customerId,
             'domain_name'   => $request->domain_name,
             'years'         => $request->years,
-            'amount'        => $finalPrice, // ← important
+            'amount'        => $finalPrice,
             'customer_type' => $request->customer_type,
             'status'        => 'pending',
         ]);
-        // Store Files Only
+
+        // Upload files
         $docs = [
-            'nid'                => $request->file('nid_file'),
-            'trade_license'      => $request->file('trade_license'),
+            'nid' => $request->file('nid_file'),
+            'trade_license' => $request->file('trade_license'),
             'authorization_letter' => $request->file('auth_letter'),
-            'other'              => $request->file('other_doc'),
+            'other' => $request->file('other_doc'),
         ];
 
         foreach ($docs as $type => $file) {
@@ -151,36 +159,61 @@ class DomainOrderController extends Controller
             }
         }
 
+        // Generate invoice
+        $invoiceNo = 'INV-' . date('Ymd') . '-' . str_pad($order->id, 5, '0', STR_PAD_LEFT);
+        $invoice = Invoice::create([
+            'customer_id' => $order->customer_id,
+            'order_id'    => $order->id,
+            'invoice_no'  => $invoiceNo,
+            'amount'      => $order->amount,
+            'status'      => 'unpaid',
+        ]);
+
+        // Email invoice to customer
+        $customer = Customer::find($order->customer_id);
+        Mail::to($customer->email)->send(new InvoiceMail($invoice));
+
         return ApiResponse::success('Domain order placed successfully', $order->load(['documents']), 201);
     }
 
-
     /**
-     * Display the specified resource.
+     * Display a specific order.
      */
     public function show($id)
     {
-        $order = DomainOrder::with(['documents'])->find($id);
+        $order = DomainOrder::with(['documents', 'customer'])->find($id);
 
         if (!$order) {
-            return response()->json(['success' => false, 'message' => 'Order not found'], 404);
+            return ApiResponse::error('Order not found', null, 404);
         }
-        return ApiResponse::success('order fetched', $order);
+
+        $isAdmin = auth('api')->check();
+        $isCustomer = auth('customer_api')->check();
+
+        if ($isCustomer && $order->customer_id !== auth('customer_api')->id()) {
+            return ApiResponse::error('Unauthorized to view this order', 403);
+        }
+
+        return ApiResponse::success('Order fetched successfully', $order);
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, string $id)
+    public function destroy($id)
     {
-        //
-    }
+        $order = DomainOrder::find($id);
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(string $id)
-    {
-        //
+        if (!$order) {
+            return ApiResponse::error('Order not found', null, 404);
+        }
+
+        $isAdmin = auth('api')->check();
+        $isCustomer = auth('customer_api')->check();
+
+        if ($isCustomer && $order->customer_id !== auth('customer_api')->id()) {
+            return ApiResponse::error('Unauthorized to delete this order', 403);
+        }
+
+        $order->delete();
+        return ApiResponse::success('Order deleted successfully');
     }
 }
+

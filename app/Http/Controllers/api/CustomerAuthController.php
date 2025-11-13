@@ -24,7 +24,7 @@ class CustomerAuthController extends Controller
         ]);
 
         $credentials = $request->only('email', 'password');
-
+        
         if (!$token = auth('customer_api')->attempt($credentials)) {
             return response()->json([
                 'success' => false,
@@ -105,30 +105,6 @@ class CustomerAuthController extends Controller
         catch (\Exception $e) {
             return ApiResponse::error('Something went wrong', $e->getMessage(), 500);
         }
-        // $validator = Validator::make($request->all(), [
-        //     'full_name' => 'required|string|max:255',
-        //     'email'     => 'required|email|unique:customers,email',
-        //     'password'  => 'required|string|min:6|confirmed',
-        // ]);
-
-        // if ($validator->fails()) {
-        //     return response()->json([
-        //         'success' => false,
-        //         'errors'  => $validator->errors()
-        //     ], 422);
-        // }
-
-        // $customer = Customer::create([
-        //     'full_name' => $request->full_name,
-        //     'email'     => $request->email,
-        //     'password'  => Hash::make($request->password),
-        // ]);
-
-        // return response()->json([
-        //     'success' => true,
-        //     'message' => 'Customer registered successfully',
-        //     'user'    => $customer
-        // ], 201);
     }
 
     public function logout()

@@ -33,12 +33,37 @@ class InvoiceController extends Controller
     // Customer: list own invoices
     public function myInvoices(Request $request)
     {
-        $customerId = auth('customer_api')->id();
+        $customer = auth('customer_api')->user();
 
-        $invoices = Invoice::with('order')
-            ->where('customer_id', $customerId)
-            ->latest()
-            ->paginate(10);
+        if (!$customer) {
+            return ApiResponse::error('Unauthorized access. Token required.', 401);
+        }
+
+        $query = Invoice::with('order')
+            ->where('customer_id', $customer->id)
+            ->latest();
+
+        // Search by invoice number or domain name
+        if ($search = $request->query('search')) {
+            $query->where(function ($q) use ($search) {
+                $q->where('invoice_no', 'like', "%{$search}%")
+                ->orWhereHas('order', function ($q2) use ($search) {
+                    $q2->where('domain_name', 'like', "%{$search}%");
+                });
+            });
+        }
+
+        // Filter by status
+        if ($status = $request->query('status')) {
+            $status = strtolower($status);
+            if (in_array($status, ['paid', 'unpaid'])) {
+                $query->where('status', $status);
+            }
+        }
+
+        // Pagination (default 10)
+        $perPage = (int) $request->query('limit', 10);
+        $invoices = $query->paginate($perPage);
 
         return ApiResponse::success('Invoices fetched', $invoices);
     }
