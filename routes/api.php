@@ -8,6 +8,7 @@ use App\Http\Controllers\api\DomainTldController;
 use App\Http\Controllers\api\TestApiController;
 // use Illuminate\Http\Request;
 use App\Http\Controllers\Api\UserController;
+use App\Http\Controllers\InvoiceController;
 use Illuminate\Support\Facades\Route;
 
 // Route::get('/user', function (Request $request) {
@@ -58,8 +59,20 @@ Route::middleware('auth:customer_api')->group(function () {
     Route::patch('customers/{id}/update-password',[CustomerController::class, 'updatePassword']);
     Route::patch('customers/{id}/status', [CustomerController::class, 'updateStatus']);
     Route::apiResource('customers', CustomerController::class);
-
+    Route::get('customers/dashboard-summary', [CustomerController::class, 'dashboardSummary']);
     Route::apiResource('domain-orders', DomainOrderController::class);
 });
 
 Route::apiResource('domains', DomainTldController::class);
+
+Route::middleware('auth:customer_api')->group(function () {
+    Route::get('my-invoices', [InvoiceController::class, 'myInvoices']);
+
+    Route::get('invoices/{id}/download', [InvoiceController::class, 'downloadPdf']);
+    Route::get('invoices/{id}', [InvoiceController::class, 'show']);
+});
+
+Route::middleware('auth:admin_api')->group(function () {
+    Route::get('invoices', action: [InvoiceController::class, 'index']);
+    Route::patch('invoices/{id}/mark-paid', [InvoiceController::class, 'markPaid']);
+});

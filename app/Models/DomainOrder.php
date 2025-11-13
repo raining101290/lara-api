@@ -19,4 +19,8 @@ class DomainOrder extends Model
     {
         return $this->hasMany(DomainOrderDocument::class, 'order_id');
     }
+    public function invoice()
+    {
+        return $this->hasOne(Invoice::class, 'order_id');
+    }
 }
